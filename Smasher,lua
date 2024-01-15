@@ -27,6 +27,6 @@ end)
 
 local label = info:CreateLabel("KeyBind :","KeyBind to Close/Open the Gui Is 'Left Control'")
 
-local batp = cred:CreateButton("Copy Discord Server Link", function()
+local batp = Main:CreateButton("Copy Discord Server Link", function()
     setclipboard("discord.gg/TT3y4gkJtq")
 end)
