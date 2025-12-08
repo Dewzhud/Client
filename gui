@@ -1,40 +1,539 @@
--- Custom UI Library by iLib
-local iLib = {}
+-- Executor-ready Combat UI Library (Module)
+-- Works with Synapse, KRNL, ScriptWare, etc.
+-- Features: executor-safe parenting, syn.protect_gui, auto-resize, tab system, toggles, dropdowns, buttons
 
--- Colors
-iLib.Colors = {
-    Primary = Color3.fromRGB(25, 25, 25),
-    Secondary = Color3.fromRGB(35, 35, 35),
-    Accent = Color3.fromRGB(0, 170, 255),
-    Text = Color3.fromRGB(255, 255, 255),
-    Border = Color3.fromRGB(50, 50, 50)
+local UILib = {}
+UILib.__index = UILib
+
+-- Services
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+-- Theme colors (Spring theme by default)
+local colors = {
+    Primary = Color3.fromRGB(120, 210, 120),
+    Secondary = Color3.fromRGB(85, 170, 85),
+    Accent = Color3.fromRGB(255, 105, 180),
+    Background = Color3.fromRGB(30, 30, 40),
+    Card = Color3.fromRGB(40, 40, 50),
+    Text = Color3.fromRGB(240, 240, 240),
+    Stroke = Color3.fromRGB(60, 60, 70)
 }
 
--- Create Main Window
-function iLib:CreateWindow(name)
-    local Window = {}
-    
-    -- ScreenGui
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "iLib_" .. name
-    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    ScreenGui.Parent = game:GetService("CoreGui")
-    
-    -- Main Frame
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "MainFrame"
-    MainFrame.Size = UDim2.new(0, 600, 0, 400)
-    MainFrame.Position = UDim2.new(0.5, -300, 0.5, -200)
-    MainFrame.BackgroundColor3 = iLib.Colors.Primary
-    MainFrame.BorderColor3 = iLib.Colors.Border
-    MainFrame.BorderSizePixel = 1
-    MainFrame.Parent = ScreenGui
-    
-    -- Title Bar
-    local TitleBar = Instance.new("Frame")
-    TitleBar.Name = "TitleBar"
-    TitleBar.Size = UDim2.new(1, 0, 0, 30)
-    TitleBar.BackgroundColor3 = iLib.Colors.Secondary
+-- Utility: safe call
+local function safe_call(f, ...)
+    local ok, res = pcall(f, ...)
+    if not ok then
+        warn("[UILib] error:", res)
+    end
+    return ok, res
+end
+
+-- Utility: choose best parent for GUI (executor-aware)
+local function choose_parent()
+    -- Prefer gethui (KRNL/Synapse), then PlayerGui, then CoreGui
+    if type(gethui) == "function" then
+        local ok, res = pcall(gethui)
+        if ok and res then return res end
+    end
+
+    -- Some executors expose 'get_hidden_gui' or similar
+    if type(get_hidden_gui) == "function" then
+        local ok, res = pcall(get_hidden_gui)
+        if ok and res then return res end
+    end
+
+    -- PlayerGui if available
+    local pl = Players.LocalPlayer
+    if pl then
+        local ok, pg = pcall(function() return pl:WaitForChild("PlayerGui", 5) end)
+        if ok and pg then return pg end
+    end
+
+    -- Fallback to CoreGui
+    local core = game:GetService("CoreGui")
+    return core
+end
+
+-- Internal: protect GUI for synapse if available
+local function protect_gui_if_possible(screenGui)
+    if type(syn) == "table" and type(syn.protect_gui) == "function" then
+        safe_call(function() syn.protect_gui(screenGui) end)
+    end
+    -- Other executors might expose protect functions; add checks as needed
+end
+
+-- Create main GUI
+function UILib.new(opts)
+    opts = opts or {}
+    local self = setmetatable({}, UILib)
+
+    -- store colors override
+    if opts.colors then
+        for k,v in pairs(opts.colors) do colors[k] = v end
+    end
+
+    -- core objects
+    self.ScreenGui = Instance.new("ScreenGui")
+    self.ScreenGui.Name = opts.name or "CombatUILib_Executor"
+    self.ScreenGui.ResetOnSpawn = false
+    self.ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    -- Allow input passthrough if requested
+    if opts.IgnoreGuiInset then
+        pcall(function() self.ScreenGui.IgnoreGuiInset = true end)
+    end
+
+    -- Main container
+    self.MainFrame = Instance.new("Frame")
+    self.MainFrame.Name = "MainFrame"
+    self.MainFrame.Size = UDim2.new(0, 420, 0, 520)
+    self.MainFrame.Position = UDim2.new(0.5, -210, 0.5, -260)
+    self.MainFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+    self.MainFrame.BackgroundColor3 = colors.Background
+    self.MainFrame.BorderSizePixel = 0
+    self.MainFrame.ClipsDescendants = true
+    self.MainFrame.Parent = self.ScreenGui
+
+    -- stroke
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = colors.Stroke
+    stroke.Thickness = 2
+    stroke.Parent = self.MainFrame
+
+    -- Title bar
+    self.TitleBar = Instance.new("Frame")
+    self.TitleBar.Name = "TitleBar"
+    self.TitleBar.Size = UDim2.new(1, 0, 0, 34)
+    self.TitleBar.BackgroundColor3 = colors.Primary
+    self.TitleBar.BorderSizePixel = 0
+    self.TitleBar.Parent = self.MainFrame
+
+    local titleLabel = Instance.new("TextLabel")
+    titleLabel.Name = "Title"
+    titleLabel.Size = UDim2.new(1, -40, 1, 0)
+    titleLabel.Position = UDim2.new(0, 10, 0, 0)
+    titleLabel.BackgroundTransparency = 1
+    titleLabel.Text = opts.title or "Combat UI Library"
+    titleLabel.TextColor3 = colors.Text
+    titleLabel.Font = Enum.Font.GothamBold
+    titleLabel.TextSize = 16
+    titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+    titleLabel.Parent = self.TitleBar
+
+    -- Close button
+    self.CloseButton = Instance.new("TextButton")
+    self.CloseButton.Name = "CloseButton"
+    self.CloseButton.Size = UDim2.new(0, 34, 1, 0)
+    self.CloseButton.Position = UDim2.new(1, -34, 0, 0)
+    self.CloseButton.BackgroundTransparency = 1
+    self.CloseButton.Text = "×"
+    self.CloseButton.TextColor3 = colors.Text
+    self.CloseButton.Font = Enum.Font.GothamBold
+    self.CloseButton.TextSize = 20
+    self.CloseButton.Parent = self.TitleBar
+
+    -- Tab container
+    self.TabContainer = Instance.new("Frame")
+    self.TabContainer.Name = "TabContainer"
+    self.TabContainer.Size = UDim2.new(1, 0, 0, 40)
+    self.TabContainer.Position = UDim2.new(0, 0, 0, 34)
+    self.TabContainer.BackgroundColor3 = colors.Card
+    self.TabContainer.BorderSizePixel = 0
+    self.TabContainer.Parent = self.MainFrame
+
+    -- Content frame (scroll)
+    self.ContentFrame = Instance.new("ScrollingFrame")
+    self.ContentFrame.Name = "Content"
+    self.ContentFrame.Size = UDim2.new(1, 0, 1, -86)
+    self.ContentFrame.Position = UDim2.new(0, 0, 0, 74)
+    self.ContentFrame.BackgroundTransparency = 1
+    self.ContentFrame.ScrollBarThickness = 6
+    self.ContentFrame.ScrollBarImageColor3 = colors.Primary
+    self.ContentFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    self.ContentFrame.AutomaticCanvasSize = Enum.AutomaticSize.None
+    self.ContentFrame.Parent = self.MainFrame
+
+    local contentLayout = Instance.new("UIListLayout")
+    contentLayout.Name = "ContentLayout"
+    contentLayout.Padding = UDim.new(0, 12)
+    contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    contentLayout.Parent = self.ContentFrame
+
+    -- Tab row layout inside TabContainer
+    self.TabListLayout = Instance.new("UIListLayout")
+    self.TabListLayout.FillDirection = Enum.FillDirection.Horizontal
+    self.TabListLayout.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    self.TabListLayout.Padding = UDim.new(0, 6)
+    self.TabListLayout.Parent = self.TabContainer
+
+    -- Data structures
+    self.Tabs = {}        -- map name->tab object
+    self.TabOrder = {}    -- array to maintain order
+    self.CurrentTab = nil
+
+    -- Events: close toggle
+    self.CloseButton.MouseButton1Click:Connect(function()
+        self.ScreenGui.Enabled = not self.ScreenGui.Enabled
+    end)
+
+    -- Make draggable
+    self:MakeDraggable(self.TitleBar)
+
+    -- Auto canvas size updater (based on AbsoluteContentSize)
+    contentLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        local totY = contentLayout.AbsoluteContentSize.Y
+        self.ContentFrame.CanvasSize = UDim2.new(0, 0, 0, totY + 18)
+    end)
+
+    return self
+end
+
+-- Dragging implementation (robust)
+function UILib:MakeDraggable(frame)
+    local dragging = false
+    local dragStart = Vector2.new()
+    local startPos = Vector2.new()
+
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            local p = self.MainFrame.Position
+            startPos = Vector2.new(p.X.Offset, p.Y.Offset)
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            -- noop; handled in global InputChanged
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if dragging and input.UserInputType == Enum.UserInputType.MouseMovement then
+            local delta = input.Position - dragStart
+            local newX = startPos.X + delta.X
+            local newY = startPos.Y + delta.Y
+            -- keep within screen bounds (basic clamp)
+            local screenX = math.clamp(newX, -1000, 1000)
+            local screenY = math.clamp(newY, -1000, 1000)
+            self.MainFrame.Position = UDim2.new(self.MainFrame.Position.X.Scale, screenX, self.MainFrame.Position.Y.Scale, screenY)
+        end
+    end)
+end
+
+-- Create a tab
+function UILib:CreateTab(name)
+    if not name then return end
+    if self.Tabs[name] then return self.Tabs[name] end
+
+    local tab = {}
+
+    -- Button
+    tab.Button = Instance.new("TextButton")
+    tab.Button.Name = tostring(name) .. "Tab"
+    tab.Button.AutoButtonColor = false
+    tab.Button.BackgroundColor3 = colors.Card
+    tab.Button.BorderSizePixel = 0
+    tab.Button.Text = tostring(name)
+    tab.Button.TextColor3 = colors.Text
+    tab.Button.Font = Enum.Font.Gotham
+    tab.Button.TextSize = 14
+    tab.Button.Size = UDim2.new(0, 84, 1, 0)
+    tab.Button.Parent = self.TabContainer
+
+    -- Container
+    tab.Container = Instance.new("Frame")
+    tab.Container.Name = tostring(name) .. "Container"
+    tab.Container.Size = UDim2.new(1, 0, 0, 0)
+    tab.Container.BackgroundTransparency = 1
+    tab.Container.Visible = false
+    tab.Container.Parent = self.ContentFrame
+
+    local containerLayout = Instance.new("UIListLayout")
+    containerLayout.Padding = UDim.new(0, 10)
+    containerLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    containerLayout.Parent = tab.Container
+
+    -- store
+    self.Tabs[name] = tab
+    table.insert(self.TabOrder, name)
+
+    -- click
+    tab.Button.MouseButton1Click:Connect(function()
+        self:SwitchTab(name)
+    end)
+
+    -- if first tab, switch
+    if #self.TabOrder == 1 then
+        self:SwitchTab(name)
+    end
+
+    return tab
+end
+
+-- Switch between tabs
+function UILib:SwitchTab(tabName)
+    if not tabName or not self.Tabs[tabName] then return end
+    if self.CurrentTab and self.Tabs[self.CurrentTab] then
+        self.Tabs[self.CurrentTab].Button.BackgroundColor3 = colors.Card
+        self.Tabs[self.CurrentTab].Container.Visible = false
+    end
+
+    self.CurrentTab = tabName
+    local t = self.Tabs[tabName]
+    t.Button.BackgroundColor3 = colors.Primary
+    t.Container.Visible = true
+end
+
+-- Create category within a tab
+function UILib:CreateCategory(tabName, categoryName)
+    local tab = self.Tabs[tabName]
+    if not tab then return end
+
+    local category = {}
+
+    category.Frame = Instance.new("Frame")
+    category.Frame.Name = tostring(categoryName)
+    category.Frame.Size = UDim2.new(1, -20, 0, 40)
+    category.Frame.BackgroundColor3 = colors.Card
+    category.Frame.BorderSizePixel = 0
+    category.Frame.LayoutOrder = #tab.Container:GetChildren() + 1
+    category.Frame.Parent = tab.Container
+
+    category.Label = Instance.new("TextLabel")
+    category.Label.Name = "Label"
+    category.Label.Size = UDim2.new(1, -20, 0, 30)
+    category.Label.Position = UDim2.new(0, 10, 0, 6)
+    category.Label.BackgroundTransparency = 1
+    category.Label.Text = tostring(categoryName)
+    category.Label.TextColor3 = colors.Primary
+    category.Label.Font = Enum.Font.GothamBold
+    category.Label.TextSize = 16
+    category.Label.TextXAlignment = Enum.TextXAlignment.Left
+    category.Label.Parent = category.Frame
+
+    -- Options Frame (holds toggles/buttons/etc)
+    category.Options = Instance.new("Frame")
+    category.Options.Name = "Options"
+    category.Options.Size = UDim2.new(1, -20, 0, 0)
+    category.Options.Position = UDim2.new(0, 10, 0, 40)
+    category.Options.BackgroundTransparency = 1
+    category.Options.Parent = category.Frame
+
+    local optionsLayout = Instance.new("UIListLayout")
+    optionsLayout.Padding = UDim.new(0, 6)
+    optionsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    optionsLayout.Parent = category.Options
+
+    -- Auto update sizes when children change
+    optionsLayout:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        local h = optionsLayout.AbsoluteContentSize.Y
+        category.Options.Size = UDim2.new(1, -20, 0, h)
+        category.Frame.Size = UDim2.new(1, -20, 0, 40 + h + 12)
+    end)
+
+    return category
+end
+
+-- Create toggle
+function UILib:CreateToggle(category, optionName, defaultValue, callback)
+    if not category or not category.Options then return end
+    local toggle = {}
+    toggle.State = defaultValue and true or false
+
+    toggle.Frame = Instance.new("Frame")
+    toggle.Frame.Name = tostring(optionName)
+    toggle.Frame.Size = UDim2.new(1, 0, 0, 30)
+    toggle.Frame.BackgroundTransparency = 1
+    toggle.Frame.Parent = category.Options
+
+    toggle.Label = Instance.new("TextLabel")
+    toggle.Label.Name = "Label"
+    toggle.Label.Size = UDim2.new(1, -80, 1, 0)
+    toggle.Label.Position = UDim2.new(0, 6, 0, 0)
+    toggle.Label.BackgroundTransparency = 1
+    toggle.Label.Text = tostring(optionName)
+    toggle.Label.TextColor3 = colors.Text
+    toggle.Label.Font = Enum.Font.Gotham
+    toggle.Label.TextSize = 14
+    toggle.Label.TextXAlignment = Enum.TextXAlignment.Left
+    toggle.Label.Parent = toggle.Frame
+
+    toggle.Button = Instance.new("TextButton")
+    toggle.Button.Name = "ToggleButton"
+    toggle.Button.Size = UDim2.new(0, 64, 0, 24)
+    toggle.Button.Position = UDim2.new(1, -70, 0.5, -12)
+    toggle.Button.BackgroundColor3 = toggle.State and colors.Primary or Color3.fromRGB(60,60,70)
+    toggle.Button.BorderSizePixel = 0
+    toggle.Button.Text = toggle.State and "ON" or "OFF"
+    toggle.Button.TextColor3 = colors.Text
+    toggle.Button.Font = Enum.Font.Gotham
+    toggle.Button.TextSize = 12
+    toggle.Button.Parent = toggle.Frame
+
+    toggle.Button.MouseButton1Click:Connect(function()
+        toggle.State = not toggle.State
+        toggle.Button.BackgroundColor3 = toggle.State and colors.Primary or Color3.fromRGB(60,60,70)
+        toggle.Button.Text = toggle.State and "ON" or "OFF"
+        if typeof(callback) == "function" then
+            task.spawn(callback, toggle.State)
+        end
+    end)
+
+    return toggle
+end
+
+-- Create button
+function UILib:CreateButton(category, buttonName, callback)
+    if not category or not category.Options then return end
+    local btn = Instance.new("TextButton")
+    btn.Name = tostring(buttonName)
+    btn.Size = UDim2.new(1, 0, 0, 36)
+    btn.BackgroundColor3 = colors.Secondary
+    btn.BorderSizePixel = 0
+    btn.Text = tostring(buttonName)
+    btn.TextColor3 = colors.Text
+    btn.Font = Enum.Font.Gotham
+    btn.TextSize = 14
+    btn.Parent = category.Options
+
+    btn.MouseButton1Click:Connect(function()
+        if typeof(callback) == "function" then
+            task.spawn(callback)
+        end
+    end)
+
+    btn.MouseEnter:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), {BackgroundColor3 = colors.Primary}):Play()
+    end)
+    btn.MouseLeave:Connect(function()
+        TweenService:Create(btn, TweenInfo.new(0.12), {BackgroundColor3 = colors.Secondary}):Play()
+    end)
+
+    return btn
+end
+
+-- Create dropdown
+function UILib:CreateDropdown(category, dropdownName, options, defaultIndex, callback)
+    if not category or not category.Options then return end
+    local dropdown = {}
+    dropdown.Options = options or {}
+    dropdown.SelectedIndex = math.clamp(defaultIndex or 1, 1, #dropdown.Options)
+    dropdown.Open = false
+
+    dropdown.Frame = Instance.new("Frame")
+    dropdown.Frame.Size = UDim2.new(1, 0, 0, 30)
+    dropdown.Frame.BackgroundTransparency = 1
+    dropdown.Frame.Parent = category.Options
+
+    dropdown.Button = Instance.new("TextButton")
+    dropdown.Button.Size = UDim2.new(1, 0, 1, 0)
+    dropdown.Button.BackgroundColor3 = colors.Secondary
+    dropdown.Button.BorderSizePixel = 0
+    dropdown.Button.Text = tostring(dropdownName) .. ": " .. (dropdown.Options[dropdown.SelectedIndex] or "Select")
+    dropdown.Button.TextColor3 = colors.Text
+    dropdown.Button.Font = Enum.Font.Gotham
+    dropdown.Button.TextSize = 14
+    dropdown.Button.TextXAlignment = Enum.TextXAlignment.Left
+    dropdown.Button.Parent = dropdown.Frame
+
+    dropdown.OptionsFrame = Instance.new("Frame")
+    dropdown.OptionsFrame.Name = "OptionsFrame"
+    dropdown.OptionsFrame.Size = UDim2.new(1, 0, 0, 0)
+    dropdown.OptionsFrame.Position = UDim2.new(0, 0, 1, 4)
+    dropdown.OptionsFrame.BackgroundColor3 = colors.Card
+    dropdown.OptionsFrame.BorderSizePixel = 0
+    dropdown.OptionsFrame.ClipsDescendants = true
+    dropdown.OptionsFrame.Visible = false
+    dropdown.OptionsFrame.Parent = dropdown.Frame
+
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 2)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.Parent = dropdown.OptionsFrame
+
+    for i, opt in ipairs(dropdown.Options) do
+        local b = Instance.new("TextButton")
+        b.Name = tostring(opt)
+        b.Size = UDim2.new(1, 0, 0, 28)
+        b.BackgroundColor3 = colors.Background
+        b.BorderSizePixel = 0
+        b.Text = tostring(opt)
+        b.TextColor3 = colors.Text
+        b.Font = Enum.Font.Gotham
+        b.TextSize = 12
+        b.LayoutOrder = i
+        b.Parent = dropdown.OptionsFrame
+
+        b.MouseButton1Click:Connect(function()
+            dropdown.SelectedIndex = i
+            dropdown.Button.Text = tostring(dropdownName) .. ": " .. tostring(opt)
+            dropdown.Open = false
+            dropdown.OptionsFrame.Visible = false
+            dropdown.OptionsFrame.Size = UDim2.new(1,0,0,0)
+            if typeof(callback) == "function" then
+                task.spawn(callback, opt, i)
+            end
+        end)
+    end
+
+    dropdown.Button.MouseButton1Click:Connect(function()
+        dropdown.Open = not dropdown.Open
+        dropdown.OptionsFrame.Visible = dropdown.Open
+        if dropdown.Open then
+            local optionCount = #dropdown.Options
+            local h = math.clamp(optionCount * 30, 0, 200)
+            dropdown.OptionsFrame.Size = UDim2.new(1, 0, 0, h)
+        else
+            dropdown.OptionsFrame.Size = UDim2.new(1, 0, 0, 0)
+        end
+    end)
+
+    return dropdown
+end
+
+-- Initialize the UI and parent to proper place (executor-safe)
+function UILib:Init()
+    -- Parent selection
+    local parent = choose_parent()
+    -- protect GUI if syn available
+    protect_gui_if_possible(self.ScreenGui)
+    -- Parent safely
+    safe_call(function()
+        self.ScreenGui.Parent = parent
+    end)
+
+    -- For compatibility: if ScreenGui ended up in CoreGui and blocked, try PlayerGui as fallback
+    if not self.ScreenGui.Parent then
+        local pl = Players.LocalPlayer
+        if pl and pl:FindFirstChild("PlayerGui") then
+            safe_call(function() self.ScreenGui.Parent = pl.PlayerGui end)
+        end
+    end
+
+    print("[UILib] Initialized and parented to:", tostring(self.ScreenGui.Parent) )
+    return self
+end
+
+-- Toggle visibility
+function UILib:Toggle()
+    self.ScreenGui.Enabled = not self.ScreenGui.Enabled
+end
+
+-- Destroy
+function UILib:Destroy()
+    safe_call(function() self.ScreenGui:Destroy() end)
+end
+
+return UILib    TitleBar.BackgroundColor3 = iLib.Colors.Secondary
     TitleBar.BorderSizePixel = 0
     TitleBar.Parent = MainFrame
     
