@@ -557,3 +557,526 @@ end
 
 -- ── Export ────────────────────────────────────────────────────────────────────
 return UI
+    TitleText    = Color3.fromRGB(238, 252, 238),
+    BodyText     = Color3.fromRGB(210, 235, 210),
+    SectionLine  = Color3.fromRGB(55, 160,  75),
+    SectionText  = Color3.fromRGB(55, 160,  75),
+    ScrollBar    = Color3.fromRGB(55, 140,  70),
+    MinBtn       = Color3.fromRGB(180, 210, 180),
+    TabBarBG     = Color3.fromRGB(18,  28,  18),
+    TabActive    = Color3.fromRGB(28,  65,  32),
+    TabInactive  = Color3.fromRGB(18,  28,  18),
+    TabTextOn    = Color3.fromRGB(80, 220,  90),
+    TabTextOff   = Color3.fromRGB(100, 150, 100),
+    BtnBG        = Color3.fromRGB(22,  58,  28),
+    BtnBorder    = Color3.fromRGB(55, 160,  75),
+    BtnText      = Color3.fromRGB(80, 210,  90),
+    BtnHover     = Color3.fromRGB(32,  80,  40),
+    BtnPress     = Color3.fromRGB(14,  40,  18),
+    ToggleOff    = Color3.fromRGB(30,  40,  30),
+    ToggleOn     = Color3.fromRGB(35, 120,  50),
+    ToggleBorder = Color3.fromRGB(55, 160,  75),
+    KnobOff      = Color3.fromRGB(80, 110,  80),
+    KnobOn       = Color3.fromRGB(160, 240, 160),
+    Font        = Enum.Font.Code,
+    FontSize=14, TitleSize=14, SectionSize=12, TabFontSize=13,
+    TitleH=30, TabBarH=28, ContentH=320,
+    RowH=20, BtnH=26, TogH=22, Pad=10,
+    Width=370, BorderPx=2, Corner=7,
+}
+local WINH = C.TitleH + C.TabBarH + C.ContentH + C.BorderPx*2
+
+-- ── Gradient helpers ──────────────────────────────────────────────────────────
+local GRAD = {
+    Color3.fromRGB(60,220,90), Color3.fromRGB(30,210,160),
+    Color3.fromRGB(160,240,60), Color3.fromRGB(60,220,90),
+}
+local function lerpC(a,b,t)
+    return Color3.new(a.R+(b.R-a.R)*t, a.G+(b.G-a.G)*t, a.B+(b.B-a.B)*t)
+end
+local function cycleColor(t,period)
+    local n=#GRAD-1
+    local pos=(t%period)/period*n
+    local seg=math.floor(pos)
+    return lerpC(GRAD[seg+1], GRAD[seg+2] or GRAD[1], pos-seg)
+end
+
+-- ── Instance helpers ──────────────────────────────────────────────────────────
+local function new(cls,props,parent)
+    local o=Instance.new(cls)
+    for k,v in pairs(props or {}) do pcall(function() o[k]=v end) end
+    if parent then o.Parent=parent end
+    return o
+end
+local function mkCorner(r,p) new("UICorner",{CornerRadius=UDim.new(0,r)},p) end
+local function mkStroke(c,px,p) new("UIStroke",{Color=c,Thickness=px or 1},p) end
+local function tw(obj,props,t)
+    TweenService:Create(obj,
+        TweenInfo.new(t or .15,Enum.EasingStyle.Quad,Enum.EasingDirection.Out),
+        props):Play()
+end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+--   UI:Window(title)  →  window object
+-- ══════════════════════════════════════════════════════════════════════════════
+function UI:Window(title)
+    local win=setmetatable({},UI)
+    win._tabs={}; win._activeTab=nil; win._minimized=false
+
+    -- ScreenGui
+    win._gui=new("ScreenGui",{
+        Name="OneClickGAG2UI", ResetOnSpawn=false,
+        ZIndexBehavior=Enum.ZIndexBehavior.Global, DisplayOrder=9999,
+    })
+    if not pcall(function() win._gui.Parent=Players.LocalPlayer:WaitForChild("PlayerGui",5) end)
+    or not win._gui.Parent then
+        pcall(function() win._gui.Parent=game:GetService("CoreGui") end)
+    end
+
+    -- Shadow
+    win._shadow=new("ImageLabel",{
+        Size=UDim2.new(0,C.Width+60,0,WINH+60),
+        Position=UDim2.new(0,10,0.15,-30),
+        BackgroundTransparency=1, Image="rbxassetid://6014261993",
+        ImageColor3=Color3.new(0,0,0), ImageTransparency=0.55,
+        ScaleType=Enum.ScaleType.Slice, SliceCenter=Rect.new(49,49,450,450), ZIndex=1,
+    },win._gui)
+
+    -- Outer border (animated gradient)
+    win._outer=new("Frame",{
+        Size=UDim2.new(0,C.Width,0,WINH), Position=UDim2.new(0,40,0.15,0),
+        BackgroundColor3=C.Border, BorderSizePixel=0,
+        ClipsDescendants=false, ZIndex=10,
+    },win._gui)
+    mkCorner(C.Corner,win._outer)
+    win._outerGrad=new("UIGradient",{
+        Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,  Color3.fromRGB(60,220,90)),
+            ColorSequenceKeypoint.new(.5, Color3.fromRGB(30,210,160)),
+            ColorSequenceKeypoint.new(1,  Color3.fromRGB(160,240,60)),
+        }),Rotation=0,
+    },win._outer)
+
+    -- Inner (clips all content to window bounds)
+    win._inner=new("Frame",{
+        Size=UDim2.new(1,-C.BorderPx*2,1,-C.BorderPx*2),
+        Position=UDim2.new(0,C.BorderPx,0,C.BorderPx),
+        BackgroundColor3=C.WindowBG, BorderSizePixel=0,
+        ClipsDescendants=true, ZIndex=11,
+    },win._outer)
+    mkCorner(C.Corner-1,win._inner)
+
+    -- Title bar
+    win._titleBar=new("Frame",{
+        Size=UDim2.new(1,0,0,C.TitleH),
+        BackgroundColor3=C.TitleBG, BorderSizePixel=0, ZIndex=30,
+    },win._inner)
+    mkCorner(C.Corner-1,win._titleBar)
+    new("Frame",{  -- square off bottom corners
+        Size=UDim2.new(1,0,0,C.Corner), Position=UDim2.new(0,0,1,-C.Corner),
+        BackgroundColor3=C.TitleBG, BorderSizePixel=0, ZIndex=31,
+    },win._titleBar)
+    mkCorner(999,new("Frame",{  -- green dot
+        Size=UDim2.new(0,8,0,8), Position=UDim2.new(0,10,0.5,-4),
+        BackgroundColor3=C.SectionLine, BorderSizePixel=0, ZIndex=32,
+    },win._titleBar))
+    new("TextLabel",{
+        Text=title or "OneClick", Font=C.Font, TextSize=C.TitleSize,
+        TextColor3=C.TitleText, TextXAlignment=Enum.TextXAlignment.Left,
+        BackgroundTransparency=1, Size=UDim2.new(1,-50,1,0),
+        Position=UDim2.new(0,24,0,0), ZIndex=32,
+    },win._titleBar)
+    local minBtn=new("TextButton",{
+        Text="─", Font=C.Font, TextSize=13, TextColor3=C.MinBtn,
+        BackgroundTransparency=1, Size=UDim2.new(0,26,1,0),
+        Position=UDim2.new(1,-28,0,0), BorderSizePixel=0,
+        AutoButtonColor=false, ZIndex=33,
+    },win._titleBar)
+    minBtn.MouseEnter:Connect(function() tw(minBtn,{TextColor3=C.SectionLine},.1) end)
+    minBtn.MouseLeave:Connect(function() tw(minBtn,{TextColor3=C.MinBtn},.1) end)
+    minBtn.MouseButton1Click:Connect(function() win:_doMinimize() end)
+
+    -- Tab bar (UIListLayout handles tab buttons only)
+    win._tabBar=new("Frame",{
+        Size=UDim2.new(1,0,0,C.TabBarH), Position=UDim2.new(0,0,0,C.TitleH),
+        BackgroundColor3=C.TabBarBG, BorderSizePixel=0,
+        ZIndex=25, ClipsDescendants=false,
+    },win._inner)
+    new("UIListLayout",{
+        FillDirection=Enum.FillDirection.Horizontal,
+        SortOrder=Enum.SortOrder.LayoutOrder,
+        Padding=UDim.new(0,0),
+    },win._tabBar)
+
+    -- Separator: sibling of tabBar (NOT inside it — keeps UIListLayout clean)
+    new("Frame",{
+        Size=UDim2.new(1,0,0,1),
+        Position=UDim2.new(0,0,0,C.TitleH+C.TabBarH-1),
+        BackgroundColor3=C.Border, BorderSizePixel=0, ZIndex=26,
+    },win._inner)
+
+    -- Underline holder: sibling of tabBar, each tab's underline lives here
+    -- so it is never clipped by inner and never caught by UIListLayout
+    win._underlineHolder=new("Frame",{
+        Size=UDim2.new(1,0,0,3),
+        Position=UDim2.new(0,0,0,C.TitleH+C.TabBarH-3),
+        BackgroundTransparency=1, BorderSizePixel=0,
+        ZIndex=27, ClipsDescendants=false,
+    },win._inner)
+
+    -- Content area
+    win._contentArea=new("Frame",{
+        Size=UDim2.new(1,0,0,C.ContentH),
+        Position=UDim2.new(0,0,0,C.TitleH+C.TabBarH),
+        BackgroundTransparency=1, BorderSizePixel=0,
+        ZIndex=12, ClipsDescendants=true,
+    },win._inner)
+
+    -- Animated outer gradient
+    local gradAngle=0
+    RunService.Heartbeat:Connect(function(dt)
+        if not win._gui or not win._gui.Parent then return end
+        gradAngle=(gradAngle+dt*90)%360
+        local t=tick()
+        pcall(function()
+            win._outerGrad.Rotation=gradAngle
+            win._outerGrad.Color=ColorSequence.new({
+                ColorSequenceKeypoint.new(0,  cycleColor(t,  3)),
+                ColorSequenceKeypoint.new(.5, cycleColor(t+1,3)),
+                ColorSequenceKeypoint.new(1,  cycleColor(t+2,3)),
+            })
+        end)
+    end)
+
+    -- Drag
+    local drag,dStart,sPos
+    win._titleBar.InputBegan:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1
+        or i.UserInputType==Enum.UserInputType.Touch then
+            drag=true; dStart=i.Position; sPos=win._outer.Position
+        end
+    end)
+    win._titleBar.InputEnded:Connect(function(i)
+        if i.UserInputType==Enum.UserInputType.MouseButton1
+        or i.UserInputType==Enum.UserInputType.Touch then drag=false end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if drag and (i.UserInputType==Enum.UserInputType.MouseMovement
+                  or i.UserInputType==Enum.UserInputType.Touch) then
+            local d=i.Position-dStart
+            win._outer.Position =UDim2.new(sPos.X.Scale,sPos.X.Offset+d.X,sPos.Y.Scale,sPos.Y.Offset+d.Y)
+            win._shadow.Position=UDim2.new(sPos.X.Scale,sPos.X.Offset+d.X-30,sPos.Y.Scale,sPos.Y.Offset+d.Y-30)
+        end
+    end)
+
+    return win
+end
+
+-- ── Internal: minimize ────────────────────────────────────────────────────────
+function UI:_doMinimize()
+    self._minimized=not self._minimized
+    if self._minimized then
+        tw(self._inner, {BackgroundTransparency=1},.12)
+        tw(self._outer, {BackgroundTransparency=1},.12)
+        tw(self._shadow,{ImageTransparency=1},     .12)
+        task.delay(.13,function()
+            self._tabBar.Visible=false; self._contentArea.Visible=false
+            self._outer.BackgroundColor3=C.Border; self._inner.BackgroundColor3=C.WindowBG
+            tw(self._outer,{Size=UDim2.new(0,C.Width,0,C.TitleH+C.BorderPx*2)},.16)
+        end)
+    else
+        self._outer.BackgroundTransparency=1
+        self._inner.BackgroundTransparency=1
+        self._shadow.ImageTransparency=1
+        tw(self._outer,{Size=UDim2.new(0,C.Width,0,WINH)},.16)
+        task.delay(.17,function()
+            self._tabBar.Visible=true; self._contentArea.Visible=true
+            tw(self._outer, {BackgroundTransparency=0},.13)
+            tw(self._inner, {BackgroundTransparency=0},.13)
+            tw(self._shadow,{ImageTransparency=0.55},  .13)
+        end)
+    end
+end
+
+-- ── Window controls ───────────────────────────────────────────────────────────
+function UI:Show()    self._gui.Enabled=true  end
+function UI:Hide()    self._gui.Enabled=false end
+function UI:Toggle()  self._gui.Enabled=not self._gui.Enabled end
+function UI:Destroy() self._gui:Destroy() end
+
+-- ══════════════════════════════════════════════════════════════════════════════
+--   win:Tab(name)  →  tab object
+-- ══════════════════════════════════════════════════════════════════════════════
+function UI:Tab(name)
+    local TAB={}; TAB._rowOrder=0
+    local tabIndex=#self._tabs+1
+
+    -- Tab button (child of tabBar → UIListLayout positions it)
+    local tabBtn=new("TextButton",{
+        Size=UDim2.new(0,90,1,0),
+        BackgroundColor3=C.TabInactive,
+        Text=name, Font=C.Font, TextSize=C.TabFontSize,
+        TextColor3=C.TabTextOff, BorderSizePixel=0,
+        AutoButtonColor=false, LayoutOrder=tabIndex, ZIndex=26,
+    },self._tabBar)
+
+    -- Animated stroke on active tab button
+    local tabStroke=new("UIStroke",{
+        Color=Color3.fromRGB(55,160,75), Thickness=0,
+        ApplyStrokeMode=Enum.ApplyStrokeMode.Border,
+    },tabBtn)
+
+    -- Underline inside underlineHolder (never clipped, never in UIListLayout)
+    local ulX=(tabIndex-1)*90
+    local underline=new("Frame",{
+        Size=UDim2.new(0,0,1,0),
+        Position=UDim2.new(0,ulX,0,0),
+        BackgroundColor3=Color3.fromRGB(255,255,255),
+        BorderSizePixel=0, ZIndex=28,
+    },self._underlineHolder)
+    mkCorner(2,underline)
+    local uGrad=new("UIGradient",{
+        Color=ColorSequence.new({
+            ColorSequenceKeypoint.new(0,  Color3.fromRGB(60,220,90)),
+            ColorSequenceKeypoint.new(.5, Color3.fromRGB(30,210,160)),
+            ColorSequenceKeypoint.new(1,  Color3.fromRGB(160,240,60)),
+        }),Rotation=0,
+    },underline)
+    local glow=new("Frame",{
+        Size=UDim2.new(1,8,2,4), Position=UDim2.new(0,-4,0,-2),
+        BackgroundColor3=Color3.fromRGB(60,200,80),
+        BackgroundTransparency=0.72, BorderSizePixel=0, ZIndex=27,
+    },underline)
+    mkCorner(4,glow)
+
+    -- Scroll frame for this tab's content
+    TAB._scroll=new("ScrollingFrame",{
+        Size=UDim2.new(1,0,1,0),
+        BackgroundTransparency=1, BorderSizePixel=0,
+        ScrollBarThickness=3, ScrollBarImageColor3=C.ScrollBar,
+        CanvasSize=UDim2.new(0,0,0,0),
+        AutomaticCanvasSize=Enum.AutomaticSize.Y,
+        ClipsDescendants=true, ZIndex=13, Visible=false,
+    },self._contentArea)
+    new("UIListLayout",{SortOrder=Enum.SortOrder.LayoutOrder,Padding=UDim.new(0,3)},TAB._scroll)
+    new("UIPadding",{
+        PaddingLeft=UDim.new(0,C.Pad), PaddingRight=UDim.new(0,C.Pad),
+        PaddingTop=UDim.new(0,6), PaddingBottom=UDim.new(0,8),
+    },TAB._scroll)
+
+    TAB._btn=tabBtn; TAB._underline=underline; TAB._tabStroke=tabStroke
+
+    -- Per-tab gradient animation (runs only while tab is active)
+    local animConn
+    local function startAnim()
+        if animConn then return end
+        animConn=RunService.Heartbeat:Connect(function()
+            if not TAB._scroll.Visible then
+                animConn:Disconnect(); animConn=nil; return
+            end
+            local t=tick()
+            pcall(function()
+                uGrad.Color=ColorSequence.new({
+                    ColorSequenceKeypoint.new(0,  cycleColor(t,    2.5)),
+                    ColorSequenceKeypoint.new(.5, cycleColor(t+.8, 2.5)),
+                    ColorSequenceKeypoint.new(1,  cycleColor(t+1.6,2.5)),
+                })
+                uGrad.Rotation=(t*30)%360
+                tabStroke.Color=cycleColor(t,2.5)
+                glow.BackgroundColor3=cycleColor(t+.8,2.5)
+            end)
+        end)
+    end
+    TAB._stopAnim=function()
+        if animConn then animConn:Disconnect(); animConn=nil end
+    end
+
+    local function activate()
+        for _,t in ipairs(self._tabs) do
+            t._scroll.Visible=false
+            tw(t._btn,       {BackgroundColor3=C.TabInactive,TextColor3=C.TabTextOff},.12)
+            tw(t._underline, {Size=UDim2.new(0,0,1,0)},.12)
+            t._tabStroke.Thickness=0
+            t._stopAnim()
+        end
+        TAB._scroll.Visible=true
+        tw(tabBtn,    {BackgroundColor3=C.TabActive,TextColor3=C.TabTextOn},.12)
+        tw(underline, {Size=UDim2.new(0,90,1,0)},.18)
+        tabStroke.Thickness=1
+        self._activeTab=TAB
+        startAnim()
+    end
+
+    tabBtn.MouseButton1Click:Connect(activate)
+    tabBtn.MouseEnter:Connect(function()
+        if self._activeTab~=TAB then tw(tabBtn,{TextColor3=Color3.fromRGB(150,210,150)},.1) end
+    end)
+    tabBtn.MouseLeave:Connect(function()
+        if self._activeTab~=TAB then tw(tabBtn,{TextColor3=C.TabTextOff},.1) end
+    end)
+
+    -- Register before activate so the loop finds this tab immediately
+    table.insert(self._tabs,TAB)
+    if tabIndex==1 then activate() end
+
+    -- ── Row helper (internal) ────────────────────────────────────────────────
+    local function row(cb,h)
+        TAB._rowOrder+=1
+        local f=new("Frame",{
+            Size=UDim2.new(1,0,0,h or C.RowH),
+            BackgroundTransparency=1, BorderSizePixel=0,
+            LayoutOrder=TAB._rowOrder, ZIndex=14,
+        },TAB._scroll)
+        if cb then cb(f) end
+        return f
+    end
+
+    -- ── tab:Stat(key, value) → handle { :Set(v), :SetColor(c) } ────────────
+    function TAB:Stat(key,value)
+        local lbl
+        row(function(f)
+            lbl=new("TextLabel",{
+                Text=key..": "..tostring(value),
+                Font=C.Font,TextSize=C.FontSize,TextColor3=C.BodyText,
+                TextXAlignment=Enum.TextXAlignment.Left,
+                BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
+                TextWrapped=true,ZIndex=15,
+            },f)
+        end)
+        local h={}
+        function h:Set(v) lbl.Text=key..": "..tostring(v) end
+        function h:SetColor(c) lbl.TextColor3=c end
+        return h
+    end
+
+    -- ── tab:Status(text) → handle { :Set(v), :SetColor(c) } ────────────────
+    function TAB:Status(text)
+        local lbl
+        row(function(f)
+            lbl=new("TextLabel",{
+                Text=tostring(text),Font=C.Font,TextSize=C.FontSize,
+                TextColor3=C.BodyText,TextXAlignment=Enum.TextXAlignment.Left,
+                BackgroundTransparency=1,Size=UDim2.new(1,0,1,0),
+                TextWrapped=true,ZIndex=15,
+            },f)
+        end)
+        local h={}
+        function h:Set(v) lbl.Text=tostring(v) end
+        function h:SetColor(c) lbl.TextColor3=c end
+        return h
+    end
+
+    -- ── tab:Section(label) ───────────────────────────────────────────────────
+    function TAB:Section(sname)
+        row(function(f)
+            f.Size=UDim2.new(1,0,0,22)
+            new("Frame",{Size=UDim2.new(0,26,0,1),Position=UDim2.new(0,0,0.5,0),
+                BackgroundColor3=C.SectionLine,BorderSizePixel=0,ZIndex=15},f)
+            new("TextLabel",{
+                Text=" "..sname.." ",Font=C.Font,TextSize=C.SectionSize,
+                TextColor3=C.SectionText,BackgroundTransparency=1,
+                AutomaticSize=Enum.AutomaticSize.X,
+                Size=UDim2.new(0,0,1,0),AnchorPoint=Vector2.new(0.5,0),
+                Position=UDim2.new(0.5,0,0,0),
+                TextXAlignment=Enum.TextXAlignment.Center,ZIndex=15,
+            },f)
+            new("Frame",{Size=UDim2.new(0,26,0,1),Position=UDim2.new(1,-26,0.5,0),
+                BackgroundColor3=C.SectionLine,BorderSizePixel=0,ZIndex=15},f)
+        end,22)
+    end
+
+    -- ── tab:Space(pixels?) ───────────────────────────────────────────────────
+    function TAB:Space(h) row(nil,h or 5) end
+
+    -- ── tab:Button(label, fn) ────────────────────────────────────────────────
+    function TAB:Button(label,callback)
+        row(function(f)
+            f.Size=UDim2.new(1,0,0,C.BtnH)
+            local btn=new("TextButton",{
+                Size=UDim2.new(1,0,1,0),BackgroundColor3=C.BtnBG,
+                Text="",BorderSizePixel=0,AutoButtonColor=false,ZIndex=15,
+            },f)
+            mkCorner(4,btn); mkStroke(C.BtnBorder,1,btn)
+            mkCorner(2,new("Frame",{
+                Size=UDim2.new(0,3,0.55,0),Position=UDim2.new(0,0,0.225,0),
+                BackgroundColor3=C.BtnBorder,BorderSizePixel=0,ZIndex=16,
+            },btn))
+            local lbl=new("TextLabel",{
+                Text=label,Font=C.Font,TextSize=C.FontSize,
+                TextColor3=C.BtnText,BackgroundTransparency=1,
+                Size=UDim2.new(1,-10,1,0),Position=UDim2.new(0,10,0,0),
+                TextXAlignment=Enum.TextXAlignment.Center,ZIndex=16,
+            },btn)
+            btn.MouseEnter:Connect(function()
+                tw(btn,{BackgroundColor3=C.BtnHover},.1)
+                tw(lbl,{TextColor3=Color3.fromRGB(120,240,130)},.1)
+            end)
+            btn.MouseLeave:Connect(function()
+                tw(btn,{BackgroundColor3=C.BtnBG},.1)
+                tw(lbl,{TextColor3=C.BtnText},.1)
+            end)
+            btn.MouseButton1Down:Connect(function() tw(btn,{BackgroundColor3=C.BtnPress},.07) end)
+            btn.MouseButton1Up:Connect(function()   tw(btn,{BackgroundColor3=C.BtnHover},.07) end)
+            btn.MouseButton1Click:Connect(function() if callback then callback() end end)
+        end)
+    end
+
+    -- ── tab:Toggle(label, default, fn) → handle { :Set(bool), :Get() } ─────
+    function TAB:Toggle(label,default,callback)
+        local state=default==true
+        local track,knob,textLbl
+        row(function(f)
+            f.Size=UDim2.new(1,0,0,C.TogH)
+            textLbl=new("TextLabel",{
+                Text=label,Font=C.Font,TextSize=C.FontSize,
+                TextColor3=C.BodyText,BackgroundTransparency=1,
+                Size=UDim2.new(1,-56,1,0),
+                TextXAlignment=Enum.TextXAlignment.Left,ZIndex=15,
+            },f)
+            track=new("Frame",{
+                Size=UDim2.new(0,40,0,18),Position=UDim2.new(1,-44,0.5,-9),
+                BackgroundColor3=state and C.ToggleOn or C.ToggleOff,
+                BorderSizePixel=0,ZIndex=15,
+            },f)
+            mkCorner(999,track); mkStroke(C.ToggleBorder,1,track)
+            knob=new("Frame",{
+                Size=UDim2.new(0,12,0,12),
+                Position=state and UDim2.new(0,24,0.5,-6) or UDim2.new(0,4,0.5,-6),
+                BackgroundColor3=state and C.KnobOn or C.KnobOff,
+                BorderSizePixel=0,ZIndex=16,
+            },track)
+            mkCorner(999,knob)
+            local cz=new("TextButton",{
+                Size=UDim2.new(1,0,1,0),BackgroundTransparency=1,Text="",ZIndex=17,
+            },f)
+            cz.MouseButton1Click:Connect(function()
+                state=not state
+                tw(track,{BackgroundColor3=state and C.ToggleOn or C.ToggleOff},.14)
+                tw(knob,{
+                    Position=state and UDim2.new(0,24,0.5,-6) or UDim2.new(0,4,0.5,-6),
+                    BackgroundColor3=state and C.KnobOn or C.KnobOff,
+                },.14)
+                if callback then callback(state) end
+            end)
+            cz.MouseEnter:Connect(function() tw(textLbl,{TextColor3=Color3.fromRGB(240,255,240)},.1) end)
+            cz.MouseLeave:Connect(function() tw(textLbl,{TextColor3=C.BodyText},.1) end)
+        end)
+        local h={}
+        function h:Get() return state end
+        function h:Set(v)
+            state=v==true
+            tw(track,{BackgroundColor3=state and C.ToggleOn or C.ToggleOff},.14)
+            tw(knob,{
+                Position=state and UDim2.new(0,24,0.5,-6) or UDim2.new(0,4,0.5,-6),
+                BackgroundColor3=state and C.KnobOn or C.KnobOff,
+            },.14)
+            if callback then callback(state) end
+        end
+        return h
+    end
+
+    return TAB
+end
+
+-- ── Export ────────────────────────────────────────────────────────────────────
+return UI
